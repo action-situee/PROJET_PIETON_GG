@@ -1,0 +1,21 @@
+# Minimal tested environment for:
+# Notebook/Step 0/0_1_Load_osm_260313_simplified_core.py
+#
+# Tested with Python 3.11.
+# Includes:
+# - OSM download/geocoding
+# - GeoDataFrame processing
+# - GeoJSON + Parquet export
+
+fiona==1.10.1
+geopandas==1.0.1
+geopy==2.4.1
+networkx==3.4.2
+numpy==2.0.0
+osmnx==2.0.1
+pandas==2.2.3
+pyarrow==19.0.0
+pyogrio==0.10.0
+pyproj==3.7.0
+requests==2.32.3
+shapely==2.0.6
