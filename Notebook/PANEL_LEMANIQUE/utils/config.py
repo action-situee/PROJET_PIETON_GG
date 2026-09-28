@@ -18,10 +18,10 @@ output_step2_path     = os.path.join(_project_root, 'Data', 'output', 'walk','GG
 output_step3_path     = os.path.join(_project_root, 'Data', 'output', 'walk','GG', 'step-3')
 output_step3_geo_weighted_path = os.path.join(_project_root, 'Data', 'output', 'walk','GG', 'step-3_geo_weighted')
 
-input_file_path_PL       = "/Users/maximiliantrique/Documents/GitHub/projet-index-walk-bike-ge-gg/Data/input/PL_input/"
-output_file_path_PL      = "/Users/maximiliantrique/Documents/GitHub/projet-index-walk-bike-ge-gg/Data/output/PL_output/"
+input_file_path_PL       = "/Users/maximiliantrique/Documents/GitHub/projet_pieton_gg/Data/input/PL_input/"
+output_file_path_PL      = "/Users/maximiliantrique/Documents/GitHub/projet_pieton_gg/Data/output/PL_output/"
 input_file_path_PL_wave1 = "/Volumes/T7_lin_win/PANEL_LEMANIQUE/WAVE1_MOBILITY/INPUT/"
-output_file_path_PL_wave1= "/Users/maximiliantrique/Documents/GitHub/projet-index-walk-bike-ge-gg/Data/output/PL_output/"
+output_file_path_PL_wave1= "/Users/maximiliantrique/Documents/GitHub/projet_pieton_gg/Data/output/PL_output/"
 
 # ─── Imports ──────────────────────────────────────────────────────────────────
 attributs_info = pd.read_excel(
