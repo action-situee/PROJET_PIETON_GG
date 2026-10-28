@@ -8,6 +8,54 @@ from rasterio.features import rasterize
 from rasterio.windows import Window, from_bounds
 
 
+def segment_rectangles(lines, half_width: float, extend: float = 0.0) -> gpd.GeoSeries:
+    """
+    Rectangle autour de chaque segment : ligne prolongée de `extend` à chaque bout
+    (dans l'axe du premier / dernier tronçon), puis buffer à bouts plats de
+    `half_width` de chaque côté. Vectorisé (shapely 2).
+
+    Utilisé par extract_buffer_feature(how="count_rectangle") et par la cellule
+    de contrôle traversées de 1_1. Les géométries non LineString sont bufferisées
+    sans prolongement.
+
+    Parameters
+    ----------
+    lines : GeoSeries | GeoDataFrame
+        Segments en CRS métrique.
+    half_width : float
+        Demi-largeur du rectangle (m), de chaque côté du segment.
+    extend : float
+        Prolongement du segment à chaque extrémité (m). 0 = pas de prolongement.
+
+    Returns
+    -------
+    GeoSeries de polygones, même index et même CRS que `lines`.
+    """
+    geo = lines.geometry if isinstance(lines, gpd.GeoDataFrame) else lines
+    geoms = np.asarray(geo.values)
+    is_line = shapely.get_type_id(geoms) == 1           # LineString
+    out = geoms.copy()
+
+    if extend > 0 and is_line.any():
+        lg = geoms[is_line]
+        coords, idx = shapely.get_coordinates(lg, return_index=True)
+        coords = coords.copy()
+        starts = np.r_[0, np.flatnonzero(np.diff(idx)) + 1]
+        ends = np.r_[starts[1:] - 1, len(idx) - 1]
+        ok = ends > starts                              # au moins 2 points
+
+        s, e = starts[ok], ends[ok]
+        for p, q in [(s, s + 1), (e, e - 1)]:            # p = extrémité, q = point voisin
+            d = coords[p] - coords[q]
+            n = np.linalg.norm(d, axis=1, keepdims=True)
+            unit = np.divide(d, n, out=np.zeros_like(d), where=n > 0)
+            coords[p] = coords[p] + unit * extend
+        out[is_line] = shapely.linestrings(coords, indices=idx)
+
+    rect = shapely.buffer(out, half_width, cap_style="flat")
+    return gpd.GeoSeries(rect, index=geo.index, crs=geo.crs)
+
+
 
 def extract_buffer_feature(
     segments_gdf: gpd.GeoDataFrame,
@@ -15,7 +63,7 @@ def extract_buffer_feature(
     feature_name: str,
     *,
     geom_kind: str,                    # "point" | "line" | "polygon"
-    how: str,                          # "presence" | "count" | "sum" | "mean" | "length_ratio" | "area_ratio" | "length_area_ratio" | "raster"
+    how: str,                          # "presence" | "count" | "count_rectangle" | "sum" | "mean" | "length_ratio" | "area_ratio" | "length_area_ratio" | "raster"
     buffer_radius: float = 50.0,
     value_column: str | None = None,   # required if how in {"sum","mean"} (for point/line/polygon attrs) or for "raster" (point value)
     crs_meter_epsg: int | None = None,
@@ -25,6 +73,7 @@ def extract_buffer_feature(
     zero_for_missing: bool = True,
     raster_stats: str = "mean",
     buffer_resolution: int = 8,
+    rectangle_extend: float = 0.0,
 ) -> pd.DataFrame:
     """
     Compute segment-level features within segment buffers, fast.
@@ -36,6 +85,9 @@ def extract_buffer_feature(
             (a) preunion_geometry (unary_union of all polygons) if provided (fastest), OR
             (b) spatial index to fetch candidates + vectorized pairwise intersections.
     - length_ratio (lines): spatial index + vectorized intersections with buffers, then total length / segment length.
+    - count_rectangle: same as count, but the zone is a flat-capped rectangle
+      (segment extended by `rectangle_extend` at both ends, half-width `buffer_radius`)
+      instead of a round buffer. See segment_rectangles().
 
     Parameters
     ----------
@@ -47,10 +99,11 @@ def extract_buffer_feature(
         Output column name.
     geom_kind : {"point","line","polygon"}
         Geometry type of feature_gdf (used to guard certain 'how' modes).
-    how : {"presence","count","sum","mean","length_ratio","area_ratio","length_area_ratio","raster"}
+    how : {"presence","count","count_rectangle","sum","mean","length_ratio","area_ratio","length_area_ratio","raster"}
         Aggregation mode (see below).
     buffer_radius : float
-        Buffer radius (in meters if CRS is projected).
+        Buffer radius (in meters if CRS is projected). For "count_rectangle":
+        half-width of the rectangle on each side of the segment.
     value_column : str | None
         Numeric attribute to aggregate for 'sum'/'mean' (and for 'raster' if using points-as-raster-samples).
     crs_meter_epsg : int | None
@@ -67,6 +120,9 @@ def extract_buffer_feature(
         Only "mean" is currently implemented (for point-based "raster" mode).
     buffer_resolution : int
         Shapely buffer resolution (default 8; lower is faster).
+    rectangle_extend : float
+        Only for how="count_rectangle": extension of the segment at each end (m)
+        before building the rectangle. 0 = rectangle exactly as long as the segment.
     preunion_geometry : shapely.Geometry | None
         If provided (e.g., shapely.unary_union of feature polygons/lines), uses it to compute intersections
         in one shot. Ideal for repeated calls with the same feature layer.
@@ -78,7 +134,7 @@ def extract_buffer_feature(
     # --- Guards ----------------------------------------------------------------
     if geom_kind not in {"point", "line", "polygon"}:
         raise ValueError("geom_kind must be 'point', 'line', or 'polygon'")
-    if how not in {"presence", "count", "sum", "mean", "length_ratio", "area_ratio", "length_area_ratio", "raster"}:
+    if how not in {"presence", "count", "count_rectangle", "sum", "mean", "length_ratio", "area_ratio", "length_area_ratio", "raster"}:
         raise ValueError("how must be one of the supported modes.")
     if how == "length_ratio" and geom_kind != "line":
         raise ValueError("length_ratio requires geom_kind='line'")
@@ -113,7 +169,11 @@ def extract_buffer_feature(
         seg_len = seg.geometry.length.to_numpy()
 
     # --- Buffer once; reuse ----------------------------------------------------
-    seg_buf_geom = seg.geometry.buffer(buffer_radius, resolution=buffer_resolution)
+    if how == "count_rectangle":
+        # Rectangle à bouts plats, segment prolongé de rectangle_extend à chaque bout
+        seg_buf_geom = segment_rectangles(seg.geometry, buffer_radius, rectangle_extend)
+    else:
+        seg_buf_geom = seg.geometry.buffer(buffer_radius, resolution=buffer_resolution)
     # Buffer area used by area-based ratios:
     buf_area = shapely.area(seg_buf_geom)
 
@@ -123,8 +183,8 @@ def extract_buffer_feature(
         feat["geometry"] = shp_make_valid(feat.geometry.values)
 
     # --- Simple modes via sjoin ------------------------------------------------
-    if how in {"presence", "count", "sum", "mean"}:
-        right_cols = ["geometry"] if how in {"presence", "count"} else ["geometry", value_column]
+    if how in {"presence", "count", "count_rectangle", "sum", "mean"}:
+        right_cols = ["geometry"] if how in {"presence", "count", "count_rectangle"} else ["geometry", value_column]
         left = gpd.GeoDataFrame(seg[["segment_id"]].copy(), geometry=seg_buf_geom, crs=seg.crs)
 
         joined = gpd.sjoin(
@@ -149,7 +209,7 @@ def extract_buffer_feature(
             out[feature_name] = out[feature_name].fillna(0).astype(int) if zero_for_missing else out[feature_name]
             return out[["segment_id", feature_name]]
 
-        if how == "count":
+        if how in {"count", "count_rectangle"}:
             agg = joined.groupby("segment_id").size().rename(feature_name).reset_index()
             out = seg[["segment_id"]].merge(agg, on="segment_id", how="left")
             out[feature_name] = out[feature_name].fillna(0.0) if zero_for_missing else out[feature_name]
