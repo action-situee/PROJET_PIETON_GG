@@ -68,7 +68,6 @@ Les champs `filtered` crees dans les notebooks Step 2 permettent de ne retenir q
 | `transport_public` | point | OSM | `highway=bus_stop`, `railway=station|halt|tram_stop`, `amenity=bus_station`, `public_transport=station` | walk, attribut `tp`, presence |
 | `amenite` | point | OSM | `amenity=*` | bike/walk, filtre selon familles d'amenites |
 | `crossing` | point | OSM | `crossing=*` | couche informative, noeuds/traversees |
-| `traffic_signals` | point | OSM | `highway=traffic_signals` | couche informative, noeuds |
 | `barrier` | point | OSM | `barrier=*` | couche informative, accessibilite |
 | `traffic_calming_point` | point | OSM | `traffic_calming=*` | couche informative, apaisement |
 | `chemin` | ligne | OSM | `highway=path` | walk, infrastructure, presence |
@@ -81,7 +80,6 @@ Les champs `filtered` crees dans les notebooks Step 2 permettent de ne retenir q
 | `lac_cours_deau` | ligne/polygone | OSM | `waterway=*`, `natural=water`, `water=*`, `waterway=riverbank` | bike `eau`, walk `lac_cours_deau`, presence |
 | `canopee` | polygone | OSM | `landuse=forest`, `natural=wood` | bike/walk, area_ratio |
 | `espaces_ouverts` | polygone | OSM | `leisure=park|playground`, `landuse=recreation_ground`, `amenity=grave_yard` | walk, presence |
-| `landuse_env` | polygone | OSM | valeurs selectionnees de `landuse=*` | bike `alentours`, area_ratio |
 
 ## Synthese des couches reseau
 
@@ -91,9 +89,9 @@ Les champs `filtered` crees dans les notebooks Step 2 permettent de ne retenir q
 | `bande` | ligne | `bike_edges_graph.geojson` | filtre `infra_bike=bande_cyclable` ou tags `cycleway=*lane/advisory/shared` | bike, `length_ratio` |
 | `vitesse` | ligne | `bike_edges_graph.geojson` ou OSM fallback | objets avec `maxspeed` | couche brute, distincte de `vitesse_all_edges` |
 | `vitesse_all_edges` | ligne | reseau prepare | `speed_kph` calcule par tags de vitesse puis fallback par type de voie | bike/walk, vitesse et zones apaisees |
-| `zone_apaisee` | ligne | `vitesse_all_edges` | filtre `5 < speed_kph < 30` dans les notebooks Step 2 | bike/walk, favorable |
+| `zone_apaisee` | ligne | pas pour GG, synthétise dans vitesse | pour GE source SITG
 | `vitesse_motorisee` | ligne | `vitesse_all_edges` | filtre `speed_kph > 25` | bike, defavorable |
-| `zone_pietonne` | ligne | `vitesse_all_edges` pour GG | filtre actuel `5 < speed_kph < 30`; en version GE, source SITG zone pietonne | walk, favorable |
+| `zone_pietonne` | ligne | pas pour GG, synthétise dans vitesse | en version GE, source SITG zone pietonne | walk, favorable |
 | `connectivite` | ligne | segment de reseau | `conn_branching_in_buffer` dans un buffer local | bike/walk, favorable |
 | `conflit_md` | point | croisement reseau marche/reseau velo | intersections et espaces partages, score de severite | bike/walk, defavorable |
 
