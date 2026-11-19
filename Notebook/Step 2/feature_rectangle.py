@@ -5,6 +5,8 @@ pondérée par la longueur de chaque ligne à l'intérieur du rectangle.
 
 Utilisé par 2_2 (boucle V3) pour how_<T> = "rectangle_weighted_mean",
 par exemple la charge de trafic TIM (VOLVEHPRT(AP)) sur le réseau vélo.
+Version catégorielle (extract_rectangle_majority_class) utilisée par 0_1 pour
+lire le schéma cyclable d'agglomération sur les arêtes vélo.
 
 Principe, pour un segment s :
   1. rectangle R(s) = buffer du segment à extrémités plates (cap_style="flat"),
@@ -53,6 +55,32 @@ def _unit_direction(geoms):
         return d / norm[:, None]
 
 
+def rectangle_pieces(seg_geom, line_geom, half_width, max_angle_deg=45.0):
+    """
+    Morceaux des lignes dans le rectangle (extrémités plates) de chaque segment.
+    Retourne (i_seg, i_line, longueur, keep, n_obliques) : une entrée par paire
+    segment-ligne qui se touchent ; keep = morceau de longueur > 0 et assez aligné.
+    """
+    rect = shapely.buffer(seg_geom, float(half_width), cap_style="flat", join_style="mitre")
+    tree = shapely.STRtree(line_geom)
+    i_seg, i_line = tree.query(rect, predicate="intersects")
+    if len(i_seg) == 0:
+        empty = np.array([], dtype=int)
+        return empty, empty, np.array([]), np.array([], dtype=bool), 0
+    pieces = shapely.intersection(rect[i_seg], line_geom[i_line])
+    piece_len = shapely.length(pieces)
+    keep = piece_len > 0
+    n_oblique = 0
+    if max_angle_deg is not None:
+        u_seg = _unit_direction(seg_geom)[i_seg]
+        u_piece = _unit_direction(pieces)
+        cos = np.abs(np.sum(u_seg * u_piece, axis=1))          # orientation sans sens
+        aligned = np.nan_to_num(cos, nan=0.0) >= np.cos(np.radians(max_angle_deg))
+        n_oblique = int((keep & ~aligned).sum())
+        keep &= aligned
+    return i_seg, i_line, piece_len, keep, n_oblique
+
+
 def extract_rectangle_weighted_mean(
     segments_gdf: gpd.GeoDataFrame,
     lines_gdf: gpd.GeoDataFrame,
@@ -87,36 +115,18 @@ def extract_rectangle_weighted_mean(
 
     seg_geom = seg.geometry.values
     seg_len = shapely.length(seg_geom)
-    rect = shapely.buffer(seg_geom, float(half_width), cap_style="flat", join_style="mitre")
-
-    # Paires (rectangle, ligne) candidates
-    tree = shapely.STRtree(lines.geometry.values)
-    i_seg, i_line = tree.query(rect, predicate="intersects")
 
     out = pd.DataFrame({
         segment_id_col: seg[segment_id_col].values,
         feature_name: np.nan,
         f"{feature_name}_valid_share": 0.0,
     })
+    i_seg, i_line, piece_len, keep, n_oblique = rectangle_pieces(
+        seg_geom, lines.geometry.values, half_width, max_angle_deg)
     if len(i_seg) == 0:
         if verbose:
             print("  Aucune ligne dans les rectangles")
         return out
-
-    pieces = shapely.intersection(rect[i_seg], lines.geometry.values[i_line])
-    piece_len = shapely.length(pieces)
-    keep = piece_len > 0
-
-    if max_angle_deg is not None:
-        u_seg = _unit_direction(seg_geom)[i_seg]
-        u_piece = _unit_direction(pieces)
-        cos = np.abs(np.sum(u_seg * u_piece, axis=1))          # orientation sans sens
-        cos_min = np.cos(np.radians(max_angle_deg))
-        aligned = np.nan_to_num(cos, nan=0.0) >= cos_min
-        n_oblique = int((keep & ~aligned).sum())
-        keep &= aligned
-    else:
-        n_oblique = 0
 
     w = piece_len[keep]
     v = lines[value_column].to_numpy(dtype="float64")[i_line[keep]]
@@ -141,4 +151,58 @@ def extract_rectangle_weighted_mean(
               f"morceaux retenus : {int(keep.sum()):,} (écartés car obliques : {n_oblique:,})")
         print(f"  Segments avec valeur : {n_val:,} / {n:,} ({100 * n_val / n:.1f} %) | "
               f"sous le seuil de part couverte : {int(too_low.sum()):,}")
+    return out
+
+
+def extract_rectangle_majority_class(
+    segments_gdf: gpd.GeoDataFrame,
+    lines_gdf: gpd.GeoDataFrame,
+    class_column: str,
+    half_width: float,
+    *,
+    max_angle_deg: float | None = 45.0,
+    min_share: float = 0.5,
+    crs_meter_epsg="EPSG:2056",
+    segment_id_col: str = "segment_id",
+    verbose: bool = True,
+) -> pd.DataFrame:
+    """
+    Version catégorielle de extract_rectangle_weighted_mean (même rectangle, même
+    filtre d'orientation) : pour chaque segment, la classe de `class_column` dont
+    les lignes couvrent la plus grande longueur dans le rectangle.
+
+    Retourne [segment_id, class_column, f"{class_column}_share"] : la classe est
+    None si aucune ligne n'est retenue, ou si sa longueur couverte est inférieure
+    à min_share × longueur du segment.
+    """
+    seg = segments_gdf.to_crs(crs_meter_epsg)[[segment_id_col, "geometry"]].reset_index(drop=True)
+    lines = lines_gdf.to_crs(crs_meter_epsg)
+    lines = lines[lines[class_column].notna() & lines.geometry.notna() & ~lines.geometry.is_empty]
+    lines = lines[[class_column, "geometry"]].reset_index(drop=True)
+    seg_len = shapely.length(seg.geometry.values)
+
+    out = pd.DataFrame({segment_id_col: seg[segment_id_col].values,
+                        class_column: None, f"{class_column}_share": 0.0})
+    i_seg, i_line, piece_len, keep, n_oblique = rectangle_pieces(
+        seg.geometry.values, lines.geometry.values, half_width, max_angle_deg)
+    if not keep.any():
+        if verbose:
+            print("  Aucune ligne retenue dans les rectangles")
+        return out
+
+    pairs = pd.DataFrame({"seg": i_seg[keep],
+                          "cls": lines[class_column].to_numpy()[i_line[keep]],
+                          "len": piece_len[keep]})
+    by_cls = pairs.groupby(["seg", "cls"], as_index=False)["len"].sum()
+    best = by_cls.sort_values("len", ascending=False).drop_duplicates("seg")
+    share = best["len"].to_numpy() / np.where(seg_len[best["seg"]] > 0, seg_len[best["seg"]], np.nan)
+    ok = share >= min_share
+    out.loc[best["seg"].to_numpy()[ok], class_column] = best["cls"].to_numpy()[ok]
+    out.loc[best["seg"].to_numpy(), f"{class_column}_share"] = np.round(share, 3)
+
+    if verbose:
+        n = int(out[class_column].notna().sum())
+        print(f"  Rectangle demi-largeur {half_width} m | morceaux retenus : {int(keep.sum()):,} "
+              f"(obliques écartés : {n_oblique:,}) | segments classés : {n:,} / {len(out):,} "
+              f"(part couverte >= {min_share:.0%})")
     return out
