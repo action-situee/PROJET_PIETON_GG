@@ -63,9 +63,9 @@ def extract_buffer_feature(
     feature_name: str,
     *,
     geom_kind: str,                    # "point" | "line" | "polygon"
-    how: str,                          # "presence" | "count" | "count_rectangle" | "sum" | "mean" | "length_ratio" | "area_ratio" | "length_area_ratio" | "raster"
+    how: str,                          # "presence" | "count" | "count_rectangle" | "sum" | "mean" | "max" | "length_ratio" | "area_ratio" | "length_area_ratio" | "raster"
     buffer_radius: float = 50.0,
-    value_column: str | None = None,   # required if how in {"sum","mean"} (for point/line/polygon attrs) or for "raster" (point value)
+    value_column: str | None = None,   # required if how in {"sum","mean","max"} (for point/line/polygon attrs) or for "raster" (point value)
     crs_meter_epsg: int | None = None,
     predicate: str | None = None,
     feature_query: str | None = None,
@@ -79,7 +79,8 @@ def extract_buffer_feature(
     Compute segment-level features within segment buffers, fast.
 
     Fast-path design:
-    - Presence / count / sum / mean: vectorized via sjoin + groupby
+    - Presence / count / sum / mean / max: vectorized via sjoin + groupby
+      (max : valeur maximale de value_column parmi les entités dans le buffer, ajout 2026-11-23)
     - area_ratio (polygons) and length_area_ratio (polygons in buffers):
         -> Avoid expensive overlay. Use either:
             (a) preunion_geometry (unary_union of all polygons) if provided (fastest), OR
@@ -134,13 +135,13 @@ def extract_buffer_feature(
     # --- Guards ----------------------------------------------------------------
     if geom_kind not in {"point", "line", "polygon"}:
         raise ValueError("geom_kind must be 'point', 'line', or 'polygon'")
-    if how not in {"presence", "count", "count_rectangle", "sum", "mean", "length_ratio", "area_ratio", "length_area_ratio", "raster"}:
+    if how not in {"presence", "count", "count_rectangle", "sum", "mean", "max", "length_ratio", "area_ratio", "length_area_ratio", "raster"}:
         raise ValueError("how must be one of the supported modes.")
     if how == "length_ratio" and geom_kind != "line":
         raise ValueError("length_ratio requires geom_kind='line'")
     if how == "area_ratio" and geom_kind != "polygon":
         raise ValueError("area_ratio requires geom_kind='polygon'")
-    if how in {"sum", "mean"} and not value_column:
+    if how in {"sum", "mean", "max"} and not value_column:
         raise ValueError(f"how='{how}' requires value_column")
     if predicate is None:
         predicate = "intersects"
@@ -183,7 +184,7 @@ def extract_buffer_feature(
         feat["geometry"] = shp_make_valid(feat.geometry.values)
 
     # --- Simple modes via sjoin ------------------------------------------------
-    if how in {"presence", "count", "count_rectangle", "sum", "mean"}:
+    if how in {"presence", "count", "count_rectangle", "sum", "mean", "max"}:
         right_cols = ["geometry"] if how in {"presence", "count", "count_rectangle"} else ["geometry", value_column]
         left = gpd.GeoDataFrame(seg[["segment_id"]].copy(), geometry=seg_buf_geom, crs=seg.crs)
 
@@ -215,11 +216,16 @@ def extract_buffer_feature(
             out[feature_name] = out[feature_name].fillna(0.0) if zero_for_missing else out[feature_name]
             return out[["segment_id", feature_name]]
 
-        # sum / mean on numeric attribute
+        # sum / mean / max on numeric attribute
         joined[value_column] = pd.to_numeric(joined[value_column], errors="coerce")
         if how == "sum":
             agg = (joined.groupby("segment_id")[value_column]
                          .sum(min_count=1)
+                         .rename(feature_name)
+                         .reset_index())
+        elif how == "max":  # >>> ajout 2026-11-23 : meilleure entité dans le buffer (ex. score de stationnement vélo)
+            agg = (joined.groupby("segment_id")[value_column]
+                         .max()
                          .rename(feature_name)
                          .reset_index())
         else:  # mean

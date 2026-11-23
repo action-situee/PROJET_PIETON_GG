@@ -1,48 +1,58 @@
 # Attribut `infra_cyclable` — récapitulatif
 
-Indice de cyclabilité (bike index), Grand Genève. État au **19.11.2026**, après les modifications du jour dans `0_1`, `2_1` et `3_1` (dont la garde sur le schéma cyclable, §2).
+Indice de cyclabilité (bike index), Grand Genève. État au **23.11.2026**, après les modifications des 19 et 23.11 dans `0_1`, `2_1` et `3_1`.
 
 `infra_cyclable` mesure le type d'aménagement cyclable du segment. Il est dans la classe **infrastructure**, avec `initial_weight = 0.5` et `class_weight = 0.5` (`attributs_info_bike_WIP.xlsx`), `buffer_size_GG = 2`, `how_GG = rectangle_weighted_mean`, `missing_value_strategy = zero_if_missing`.
 
-> Les sorties actuelles de `step-1` à `step-3` ont été produites **avant** tout ou partie de ces modifications. Pour qu'elles s'appliquent, relancer dans l'ordre : `0_1` → `1_0` → `2_1` → `2_2` → `3_1` → `3_2`. En particulier, `1_0` est nécessaire pour que les `footway` ajoutés au graphe vélo deviennent des segments.
+> Pour appliquer les modifications du 23.11, relancer : `0_1` → `2_1` → `2_2` → `3_1` → `3_2`. `1_0` n'est pas nécessaire : elles changent les classes, pas le réseau, et `step1_all_segments` (23.11, 9h26) contient déjà les `footway` ajoutés le 19.11.
 
 ## 1. Classes
 
-Une seule classe par way OSM : la première règle qui s'applique, dans l'ordre du tableau. Le **rang** sert ensuite à fusionner avec le schéma cyclable d'agglomération (la classe de rang le plus haut l'emporte). Le **score** est attribué dans `2_1`.
+Une seule classe par way OSM : la première règle qui s'applique, dans l'ordre du tableau (`map_bike_infra`, `0_1` cellule 18). Le **rang** sert ensuite à fusionner avec le schéma cyclable d'agglomération (la classe de rang le plus haut l'emporte, §2). Le **score** est attribué dans `2_1`.
 
-| Classe | Score | Rang | Règle OSM (`map_bike_infra`) | km avant 19.11 | km après | Filtre des doublons (3_1) | Modif. 19.11 |
-|---|---|---|---|---|---|---|---|
-| `piste_cyclable` | 1 | 8 | `highway=cycleway` (sauf `segregated=no`) ; `highway=path` + `bicycle=designated` + `segregated=yes` ; `cycleway:*=track` | 485 | 290 | retire (si dessinée à part) | `separate` retiré ; `cycleway` + `segregated=no` → `voie_mixte` |
-| `voie_mixte` | 0,7 | 6 | `highway=cycleway` + `segregated=no` ; `highway=path` + `bicycle=designated` (non séparé) | — | 237 | retire | **nouvelle** |
-| `bande_cyclable` | 0,7 | 7 | `cycleway:*=lane` | 516 | 526 | protégée, ne retire pas (portée par la route) | inchangée |
-| `partage_bus` | 0,5 | 4 | `cycleway:*=share_busway / shared_busway / shared_lane` | 88 | 91 | protégée, ne retire pas | inchangée |
-| `accotement` | 0,5 | 3 | `cycleway:*=shoulder` | — | 69 | protégée, ne retire pas | **nouvelle** |
-| `footway_designe` | 0,6 | 5 | `highway=footway` + `bicycle=designated` | — | 67 | retire | **nouvelle** |
-| `bike_pedestrian_area` | 0,4 | 2 | `highway=pedestrian / living_street` ; `highway=footway` + `bicycle=yes / permissive` | 298 | 429 | peut être retirée | footway `yes/permissive` ajoutés |
-| `partage` | 0,3 | 1 | `highway=track / path / bridleway` (hors `path` désigné) | 7 786 | 7 662 | peut être retirée | `path` désigné → `voie_mixte` |
-| `bike_road` | 0 | 0 | autres routes ouvertes aux vélos, dont celles taguées `cycleway=separate` | 8 455 | 8 456 | peut être retirée | reçoit les routes `separate` |
-| *(hors graphe vélo)* | — | — | `footway` sans accès vélo, `service`, autoroutes, `bicycle=no`… | 15 336 | 15 138 | — | ~200 km de `footway` entrent dans le graphe |
+| Ordre | Règle OSM | Classe | Score | Rang | km OSM (23.11) | Filtre des doublons (3_1) |
+|---|---|---|---|---|---|---|
+| 1 | `highway=cycleway` (sauf `segregated=no`) | `piste_cyclable` | 1 | 10 | 211 | retire (dessinée à part) |
+| 1 | `highway=cycleway` + `segregated=no` | `voie_mixte` | 0,7 | 8 | 119 | retire |
+| 2 | `highway=path` + `bicycle=designated` + `segregated=yes` | `piste_cyclable` | 1 | 10 | 6,5 | retire |
+| 2 | `highway=path` + `bicycle=designated`, non séparé | `voie_mixte` | 0,7 | 8 | 117 | retire |
+| 3 | `cycleway:*=track` (piste portée par la route) | `piste_cyclable` | 1 | 10 | 72 | protégée, ne retire pas |
+| 4 | `cycleway:*=lane` | `bande_cyclable` | 0,7 | 9 | 526 | protégée, ne retire pas |
+| 5 | `cycleway:*=opposite_lane / opposite_track` | `contresens` | 0,5 | 6 | 20 | protégée, ne retire pas |
+| 6 | `cycleway:*=share_busway / shared_busway` ; `busway:*` (≠ `no`) ; `bus:lanes` / `psv:lanes` contenant `designated` | `partage_bus` | 0,5 | 5 | 52 | protégée, ne retire pas |
+| 7 | `cycleway:*=shoulder` | `accotement` | 0,5 | 4 | 69 | protégée, ne retire pas |
+| 8 | `highway=footway` + `bicycle=designated` | `footway_designe` | 0,6 | 7 | 67 | retire |
+| 9 | `highway=pedestrian / living_street` ; `highway=footway` + `bicycle=yes / permissive` | `bike_pedestrian_area` | 0,4 | 3 | 429 | peut être retirée |
+| 10 | `highway=track / path / bridleway` (hors `path` désigné) | `partage` | 0,3 | 2 | 7 662 | peut être retirée |
+| 11 | `cycleway:*=shared_lane` (marquage de chaussée partagée) | `chaussee_partagee` | 0,2 | 1 | 63 | peut être retirée |
+| 12 | autres routes ouvertes aux vélos, dont `cycleway=separate` | `bike_road` | 0 | 0 | 8 413 | peut être retirée |
+| — | `footway` sans accès vélo, `service`, autoroutes, `bicycle=no`… | *(hors graphe vélo)* | — | — | 15 138 | — |
 
-km = longueur des ways de `GG.osm.pbf` (14.10.2026), classification OSM seule, **avant** fusion avec le schéma cyclable. Une route avec `cycleway:both=lane` compte une fois.
+km = longueur des ways de `GG.osm.pbf` (14.10.2026), classification OSM seule, **avant** fusion avec le schéma cyclable. Une route avec `cycleway:both=lane` compte une fois. Ces km sont plus élevés que ceux affichés par `0_1` et `2_1`, qui mesurent le réseau découpé au périmètre et nettoyé : comparer des parts, pas des km.
 
-Principaux reclassements du 19.11 :
+Côtés de la rue : les valeurs de `cycleway`, `cycleway:left`, `cycleway:right` et `cycleway:both` sont réunies. Une route avec une bande d'un côté et un contresens de l'autre est `bande_cyclable` (règle 4 avant la règle 5).
 
-| De | Vers | km |
+### Historique
+
+| Date | Changement | Effet (km OSM) |
 |---|---|---|
-| hors graphe | `bike_pedestrian_area` | 131,5 |
-| `piste_cyclable` | `voie_mixte` | 119,4 |
-| `partage` | `voie_mixte` | 117,3 |
-| `piste_cyclable` | `bike_road` (`separate`) | 70,1 |
-| `bike_road` | `accotement` | 68,6 |
-| hors graphe | `footway_designe` | 67,2 |
-| `piste_cyclable` | `bande_cyclable` | 9,7 |
-| `partage` | `piste_cyclable` | 6,5 |
+| 19.11 | `footway` ouverts aux vélos dans le graphe | +131 `bike_pedestrian_area`, +67 `footway_designe` |
+| 19.11 | `cycleway` + `segregated=no` et `path` désigné → `voie_mixte` | 119 depuis `piste_cyclable`, 117 depuis `partage` |
+| 19.11 | `cycleway=separate` ne vaut plus piste | 70 `piste_cyclable` → `bike_road` |
+| 19.11 | `cycleway=shoulder` → `accotement` | 69 depuis `bike_road` |
+| 23.11 | `shared_lane` sort de `partage_bus` → `chaussee_partagee` (0,2) | 63 |
+| 23.11 | `busway:*` et `bus:lanes` / `psv:lanes` → `partage_bus` | 24 depuis `bike_road` |
+| 23.11 | `opposite_lane` / `opposite_track` → `contresens` (0,5) | 20 depuis `bike_road` |
 
 ## 2. Fusion avec le schéma cyclable d'agglomération (`0_1`, cellules 25–26)
 
 Source : `AGGLO_SCHEMA_CYCLABLE.gpkg`, champ `amgt_exist`. Chaque arête reçoit la classe majoritaire du schéma dans un rectangle de demi-largeur 10 m (angle ≤ 45°, part couverte ≥ 50 %). La classe finale `infra_cyclable` est la plus haute (en rang) entre OSM et schéma ; `infra_cyclable_source` dit laquelle a gagné.
 
-> Cette fusion n'est pas dans le dernier commit (18.11.2026, 18h01) : elle a été ajoutée depuis, sans commit, et sans indication d'auteur dans le notebook.
+> Cette fusion n'est pas dans le commit du 18.11.2026 (18h01) : elle a été ajoutée depuis, sans indication d'auteur dans le notebook.
+
+### Classes OSM protégées (ajout du 23.11)
+
+« Site propre (voie verte ou piste cyclable) » reste `piste_cyclable`. Mais cette catégorie mélange voies vertes et pistes, alors qu'OSM distingue les voies partagées avec les piétons. Le schéma ne surclasse donc plus une arête qu'OSM classe `voie_mixte` ou `footway_designe` (`SCHEMA_PROTECTED_OSM`, `0_1` cellule 26). Sur le graphe du 23.11 (chaque voie comptée une fois), environ 90 km retrouvent leur classe OSM : 81 km de `voie_mixte` et 8 km de `footway_designe` qui passaient en piste, plus 2 km qui passaient en bande.
 
 | `amgt_exist` | Classe |
 |---|---|
@@ -77,7 +87,7 @@ Ces routes gardent leur classe OSM (en général `bike_road`) et portent `schema
 | 2 | `0_1` | 18 | `map_bike_infra` : typologie OSM `infra_bike` ; `INFRA_RANK` ; `get_bike_direction` (sens vélo, pour le graphe orienté) |
 | 3 | `0_1` | 26 | fusion avec le schéma cyclable, avec la garde sur les routes (§2) → `infra_cyclable` (classe), `infra_cyclable_source`, `schema_piste_ignoree` dans `bike_edges_graph` |
 | 4 | `1_0_Prepare_network` | — | segmentation (segments ≤ 50 m) → `step1_all_segments` (contient `highway` et `infra_cyclable`) |
-| 5 | `2_1_Filter_features_bike` | 43–44 | classe → score (`INFRA_SCORES`) ; classe inconnue → 0 |
+| 5 | `2_1_Filter_features_bike` | 43–44 | classe → score (`INFRA_SCORES`) ; classe inconnue → 0 ; affiche la couverture par classe (km et % du réseau vélo, chaque voie comptée une fois) |
 | 6 | `2_2_Process_features` | — | `rectangle_weighted_mean`, demi-largeur 2 m → `infra_cyclable_2` par segment |
 | 7 | `3_1_Compute_index` | 4, 9, 10 | filtre des doublons parallèles (voir §4), puis min-max et calcul de l'indice |
 | 8 | `3_2_Agregated_index` | — | moyenne pondérée par la longueur → carreaux 200 m, GIREC, communes |
@@ -93,7 +103,7 @@ But : quand une piste est dessinée à côté d'une route, ne compter le corrido
 | `DEDUP_HALF_WIDTH_M` | 10 | demi-largeur du rectangle (extrémités plates) |
 | `DEDUP_MAX_ANGLE_DEG` | 30 | au-delà, croisement : rien n'est retiré |
 | `DEDUP_MIN_SHARE` | 0,8 | part minimale du segment couverte |
-| `DEDUP_DEDICATED_MIN_SCORE` | 0,5 | seuls les aménagements dédiés (≥ 0,5) retirent, et seulement des segments non dédiés (< 0,5) ; entre aménagements dédiés, rien n'est retiré |
+| `DEDUP_DEDICATED_MIN_SCORE` | 0,5 | seuls les aménagements dédiés (≥ 0,5 : piste, bande, voie mixte, footway désigné, contresens, bus, accotement) retirent, et seulement des segments non dédiés (< 0,5 : aire piétonne, partage, chaussée partagée, route) ; entre aménagements dédiés, rien n'est retiré |
 | `DEDUP_ELIMINATOR_HIGHWAYS` | `cycleway, path, footway, pedestrian, track, bridleway` | seul un segment **dessiné à part** retire ; évite qu'une bande retire l'autre chaussée d'une route à chaussées séparées. `None` = pas de condition |
 
 Effet mesuré sur les données du 19.11 (step2 de 16h16, avant le changement `separate`). Effet carreaux : approximation par point milieu, indice actuel, sans recalcul du min-max.
@@ -126,12 +136,11 @@ Sorties carreaux 200 m du 19.11 à 14h36, donc **avant** les modifications du jo
 
 | Sujet | km (OSM) | Constat | Statut |
 |---|---|---|---|
-| Contresens aménagés | 21 | `opposite_lane` / `opposite_track` non reconnus par `map_bike_infra` (comparaison exacte des valeurs) → `bike_road` | à faire |
 | `get_bike_direction` | 39 | ne lit pas `cycleway=opposite*` : ces rues sont vues à sens unique pour les vélos dans le graphe orienté | à faire |
-| Voies de bus | ~100 (25 gagnables) | `busway:*` et `bus:lanes` non lus ; 91 km sans info d'accès vélo ; ~40 km de voies bus dessinées à part, hors graphe | à trancher : accès strict ou permissif ; voies séparées hors graphe ou non |
-| `cycleway=shared_lane` | 71 | classé `partage_bus`, alors que la valeur OSM désigne un marquage de chaussée partagée (pictogrammes), pas une voie bus | à vérifier |
+| `cycleway=opposite` (sans marquage) | 18 | contresens autorisé sans bande : non classé (`bike_road`) ; relève plutôt de `sens_inverse` | à trancher |
+| Voies bus dessinées à part | ~40 | `highway=service` + `access=no` + `bus=designated`, `highway=busway` : hors graphe vélo | non traité |
+| Accès vélo aux voies bus | — | `busway` et `bus:lanes` comptés en `partage_bus` sans vérifier l'accès vélo (91 km sans info d'accès dans OSM) | hypothèse permissive |
 | Bande suggérée / obligatoire | 213 renseignés | `cycleway:*:lane=advisory` (chaucidou) vs `exclusive` : tout est à 0,7 | à trancher (ex. 0,5 pour advisory) |
-| Côtés de la rue | — | les côtés sont fusionnés : une bande d'un seul côté classe toute la way en `bande_cyclable` | limite connue |
+| Côtés de la rue | — | les côtés sont réunis : une bande d'un seul côté classe toute la way en `bande_cyclable` | limite connue |
 | Largeur, séparation physique | 48 / ~0 | `width` sur 48 km des 330 km de `highway=cycleway` ; `cycleway:*:separation` quasi absent | non exploitable |
-| Segments `footway` | ~200 | absents de `step1_all_segments` tant que `1_0` n'est pas relancé | relancer `1_0` |
 | Schéma cyclable | 49 | routes encore passées en piste par le schéma, sans voie cyclable OSM à côté : à contrôler dans QGIS (aménagement réel absent d'OSM, ou décalage de tracé) | à vérifier |
