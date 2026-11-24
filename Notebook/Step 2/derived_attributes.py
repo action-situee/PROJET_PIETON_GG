@@ -121,8 +121,157 @@ def derive_traversees(features: pd.DataFrame, ctx: dict) -> pd.DataFrame:
 
 
 # ============================================================================
+# Coupures (vélo) — ajout Claude, 2026-11-24
+# Méthode détaillée : attribut_coupure.md (racine du dépôt)
+# ============================================================================
+# Couche de hiérarchie routière (relative à input_file_path), champ de classe et conversion
+COUPURE_HIERARCHIE_FILE = "network_agreg/AGGLO_HIERARCHIE_ROUTE.gpkg"
+COUPURE_CLASS_FIELD = "classe"
+COUPURE_CLASS_MAP = {"primaire": 1, "secondaire": 2, "tertiaire": 3}   # autoroute, bretelle, vide -> ignorés
+COUPURE_HORS_HIERARCHIE = 4        # classe du cycliste sans route colinéaire (path, footway...)
+COUPURE_MAX_ECART = 3              # écart maximal possible : 4 - 1
+COUPURE_HALF_WIDTH_M = 10.0        # demi-largeur du rectangle (défaut si buffer_size vide dans l'Excel)
+COUPURE_EXTEND_M = 10.0            # prolongement du segment à chaque bout (défaut si extend_m vide dans l'Excel)
+COUPURE_COLINEAR_MIN = 0.8         # |cos| >= seuil : candidat « route du cycliste » ; < seuil : coupure possible
+COUPURE_MIN_PIECE_M = 2.0          # morceaux de route plus courts ignorés (coins de rectangle, orientation instable)
+COUPURE_N_SCALE = 2.0              # f(n) = 1 / (1 + n / COUPURE_N_SCALE)
+COUPURE_GIRATOIRE_ATTR = "giratoire"   # segments avec giratoire_<buffer> > 0 -> coupure = NaN
+COUPURE_CRS = "EPSG:2056"
+
+
+def compute_coupure_intensity(classe_cycliste, n_coupures, ecart_max,
+                              max_ecart=COUPURE_MAX_ECART, n_scale=COUPURE_N_SCALE):
+    """Intensité de coupure (attribut défavorable, inversé dans 3_1) :
+    1 - (1 - écart_max / max_ecart) / (1 + n / n_scale). 0 = aucune coupure."""
+    good = (1 - np.asarray(ecart_max, dtype=float) / max_ecart) / (1 + np.asarray(n_coupures, dtype=float) / n_scale)
+    return 1 - good
+
+
+def derive_coupure(features: pd.DataFrame, ctx: dict) -> pd.DataFrame:
+    """
+    Coupures de l'itinéraire cyclable par des routes plus intenses (hiérarchie routière).
+
+    Pour chaque segment vélo : rectangle (demi-largeur, segment prolongé aux deux bouts),
+    morceaux de route découpés par le rectangle, colinéarité locale |cos θ| de chaque morceau.
+      - route du cycliste : morceau le plus colinéaire parmi |cos| >= COUPURE_COLINEAR_MIN
+        (égalité -> classe la plus intense) ; aucun -> hors hiérarchie (4)
+      - coupures : morceaux |cos| < COUPURE_COLINEAR_MIN de classe plus intense que celle du cycliste
+      - intensité = 1 - (1 - écart_max / 3) / (1 + n / 2)   (0 = aucune coupure)
+    Segments avec giratoire à proximité (giratoire_<buffer> > 0) : intensité NaN.
+
+    ctx attendu : colname(attr), out_name, row (ligne Excel), input_file_path.
+    """
+    import geopandas as gpd
+    import shapely
+    from feature_to_network import segment_rectangles
+
+    row = ctx.get("row", {})
+    def _num(key, default):
+        v = row.get(key, np.nan) if hasattr(row, "get") else np.nan
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return default
+        return default if np.isnan(v) else v
+    territory = ctx.get("territory", "GG")
+    half_width = _num(f"buffer_size_{territory}", COUPURE_HALF_WIDTH_M)
+    extend = _num(f"extend_m_{territory}", COUPURE_EXTEND_M)
+    out_name = ctx["out_name"]
+
+    # --- Segments vélo -------------------------------------------------------
+    if not isinstance(features, gpd.GeoDataFrame) or features.geometry is None:
+        raise TypeError("derive_coupure : features doit être un GeoDataFrame (step2_features avec géométrie)")
+    seg = features.geometry.to_crs(COUPURE_CRS)
+    seg_geoms = np.asarray(seg.values)
+    n_seg = len(seg_geoms)
+    rect = np.asarray(segment_rectangles(seg, half_width, extend).values)
+    c0, c1 = shapely.get_point(seg_geoms, 0), shapely.get_point(seg_geoms, -1)
+    d_seg = np.c_[shapely.get_x(c1) - shapely.get_x(c0), shapely.get_y(c1) - shapely.get_y(c0)]
+    nrm = np.linalg.norm(d_seg, axis=1, keepdims=True)
+    d_seg = np.divide(d_seg, nrm, out=np.full_like(d_seg, np.nan), where=nrm > 0)
+
+    # --- Hiérarchie routière -------------------------------------------------
+    path = f"{ctx['input_file_path']}/{COUPURE_HIERARCHIE_FILE}"
+    roads = gpd.read_file(path).to_crs(COUPURE_CRS)
+    roads["classe_num"] = roads[COUPURE_CLASS_FIELD].map(COUPURE_CLASS_MAP)
+    n_ignored = int(roads["classe_num"].isna().sum())
+    roads = roads[roads["classe_num"].notna() & roads.geometry.notna()]
+    roads = roads.set_geometry(shapely.force_2d(roads.geometry.values)).explode(index_parts=False, ignore_index=True)
+    road_geoms = np.asarray(roads.geometry.values)
+    road_cls = roads["classe_num"].to_numpy(dtype=float)
+    print(f"  Hiérarchie routière : {len(roads):,} lignes retenues ({n_ignored:,} ignorées : autoroute, bretelle, sans classe)")
+
+    # --- Morceaux de route dans les rectangles -------------------------------
+    i_seg, i_road = shapely.STRtree(road_geoms).query(rect, predicate="intersects")
+    pieces = shapely.intersection(rect[i_seg], road_geoms[i_road])
+    parts, i_pair = shapely.get_parts(pieces, return_index=True)
+    is_line = shapely.get_type_id(parts) == 1
+    parts, i_pair = parts[is_line], i_pair[is_line]
+    keep = shapely.length(parts) >= COUPURE_MIN_PIECE_M
+    parts, i_pair = parts[keep], i_pair[keep]
+    s_idx, cls = i_seg[i_pair], road_cls[i_road[i_pair]]
+
+    p0, p1 = shapely.get_point(parts, 0), shapely.get_point(parts, -1)
+    d_p = np.c_[shapely.get_x(p1) - shapely.get_x(p0), shapely.get_y(p1) - shapely.get_y(p0)]
+    nrm = np.linalg.norm(d_p, axis=1, keepdims=True)
+    d_p = np.divide(d_p, nrm, out=np.full_like(d_p, np.nan), where=nrm > 0)
+    cos = np.abs((d_p * d_seg[s_idx]).sum(axis=1)).round(3)
+    ok = ~np.isnan(cos)
+    s_idx, cls, cos = s_idx[ok], cls[ok], cos[ok]
+    pdf = pd.DataFrame({"seg": s_idx, "cls": cls, "cos": cos})
+
+    # --- Route du cycliste : plus colinéaire, puis plus intense ---------------
+    cand = pdf[pdf["cos"] >= COUPURE_COLINEAR_MIN].sort_values(["seg", "cos", "cls"], ascending=[True, False, True])
+    own = cand.drop_duplicates("seg").set_index("seg")
+    classe_cyc = np.full(n_seg, float(COUPURE_HORS_HIERARCHIE))
+    classe_cyc[own.index.to_numpy()] = own["cls"].to_numpy()
+    cos_cyc = np.full(n_seg, np.nan)
+    cos_cyc[own.index.to_numpy()] = own["cos"].to_numpy()
+
+    # --- Coupures : non colinéaires et plus intenses que la route du cycliste --
+    cut = pdf[pdf["cos"] < COUPURE_COLINEAR_MIN]
+    cut = cut[cut["cls"].to_numpy() < classe_cyc[cut["seg"].to_numpy()]]
+    n_cut = np.zeros(n_seg)
+    ecart = np.zeros(n_seg)
+    if len(cut):
+        g = cut.groupby("seg")["cls"]
+        n_cut[g.size().index.to_numpy()] = g.size().to_numpy()
+        mins = g.min()
+        ecart[mins.index.to_numpy()] = classe_cyc[mins.index.to_numpy()] - mins.to_numpy()
+
+    intensity = compute_coupure_intensity(classe_cyc, n_cut, ecart)
+
+    # Segments sans géométrie exploitable
+    bad = ~shapely.is_valid(seg_geoms) | shapely.is_empty(seg_geoms) | np.isnan(d_seg).any(axis=1)
+    intensity[bad] = np.nan
+
+    # --- Giratoires : déjà comptés par l'attribut giratoire -> NaN ------------
+    n_gir = 0
+    try:
+        gcol = ctx["colname"](COUPURE_GIRATOIRE_ATTR)
+    except KeyError:
+        gcol = None
+    if gcol and gcol in features.columns:
+        gir = (pd.to_numeric(features[gcol], errors="coerce") > 0).to_numpy()
+        intensity[gir] = np.nan
+        n_gir = int(gir.sum())
+    else:
+        print(f"  ⚠️ colonne giratoire absente : pas de NaN près des giratoires")
+    print(f"  {len(pdf):,} morceaux de route dans les rectangles | {n_gir:,} segments près d'un giratoire -> NaN")
+
+    return pd.DataFrame({
+        out_name: intensity,                                  # intensité de coupure (défavorable)
+        f"{out_name}_n": n_cut,                               # nombre de coupures (écart > 0)
+        f"{out_name}_ecart": ecart,                           # écart de classe maximal (0 à 3)
+        f"{out_name}_classe_cycliste": classe_cyc,            # 1, 2, 3, ou 4 hors hiérarchie
+        f"{out_name}_cos_cycliste": cos_cyc,                  # colinéarité de la route retenue (NaN si hors hiérarchie)
+    }, index=features.index)
+
+
+# ============================================================================
 # Registre : nom de l'attribut dans attributs_info -> fonction
 # ============================================================================
 DERIVED_ATTRIBUTES = {
     "traversees": derive_traversees,
+    "coupure": derive_coupure,       # >>> ajout 2026-11-24
 }
