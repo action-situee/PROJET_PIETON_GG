@@ -134,7 +134,21 @@ COUPURE_HALF_WIDTH_M = 10.0        # demi-largeur du rectangle (défaut si buffe
 COUPURE_EXTEND_M = 10.0            # prolongement du segment à chaque bout (défaut si extend_m vide dans l'Excel)
 COUPURE_COLINEAR_MIN = 0.8         # |cos| >= seuil : candidat « route du cycliste » ; < seuil : coupure possible
 COUPURE_MIN_PIECE_M = 2.0          # morceaux de route plus courts ignorés (coins de rectangle, orientation instable)
-COUPURE_N_SCALE = 2.0              # f(n) = 1 / (1 + n / COUPURE_N_SCALE)
+COUPURE_N_SCALE = 2.0              # f(n_eff) = 1 / (1 + n_eff / COUPURE_N_SCALE)
+# >>> POIDS DES BRANCHES (Claude, 2026-11-25) : poids d'une branche de croisement dans n_eff,
+# selon (classe du cycliste, classe de la route croisée). 1 primaire, 2 secondaire, 3 tertiaire, 4 hors hiérarchie.
+#   sous la diagonale (route croisée plus intense, écart > 0) : 1 (comme avant le 25.11)
+#   diagonale (même classe) : croisement d'égal à égal, plus fort pour les grands axes
+#   au-dessus (route croisée moins intense) : petit poids, un carrefour reste un carrefour
+# Mettre la diagonale et le dessus à 0 redonne le calcul du 24.11 (seules les coupures par une route plus intense).
+COUPURE_POIDS_BRANCHE = {
+    #  croisée :  1     2     3
+    1: {1: 0.50, 2: 0.30, 3: 0.15},   # cycliste sur une primaire
+    2: {1: 1.00, 2: 0.35, 3: 0.15},   # cycliste sur une secondaire
+    3: {1: 1.00, 2: 1.00, 3: 0.20},   # cycliste sur une tertiaire
+    4: {1: 1.00, 2: 1.00, 3: 1.00},   # cycliste hors hiérarchie
+}
+# <<< FIN POIDS DES BRANCHES
 COUPURE_GIRATOIRE_ATTR = "giratoire"   # segments avec giratoire_<buffer> > 0 -> coupure = NaN
 COUPURE_CRS = "EPSG:2056"
 
@@ -142,7 +156,8 @@ COUPURE_CRS = "EPSG:2056"
 def compute_coupure_intensity(classe_cycliste, n_coupures, ecart_max,
                               max_ecart=COUPURE_MAX_ECART, n_scale=COUPURE_N_SCALE):
     """Intensité de coupure (attribut défavorable, inversé dans 3_1) :
-    1 - (1 - écart_max / max_ecart) / (1 + n / n_scale). 0 = aucune coupure."""
+    1 - (1 - écart_max / max_ecart) / (1 + n_eff / n_scale). 0 = aucune coupure.
+    n_coupures = n_eff, somme pondérée des branches (COUPURE_POIDS_BRANCHE)."""
     good = (1 - np.asarray(ecart_max, dtype=float) / max_ecart) / (1 + np.asarray(n_coupures, dtype=float) / n_scale)
     return 1 - good
 
@@ -155,8 +170,10 @@ def derive_coupure(features: pd.DataFrame, ctx: dict) -> pd.DataFrame:
     morceaux de route découpés par le rectangle, colinéarité locale |cos θ| de chaque morceau.
       - route du cycliste : morceau le plus colinéaire parmi |cos| >= COUPURE_COLINEAR_MIN
         (égalité -> classe la plus intense) ; aucun -> hors hiérarchie (4)
-      - coupures : morceaux |cos| < COUPURE_COLINEAR_MIN de classe plus intense que celle du cycliste
-      - intensité = 1 - (1 - écart_max / 3) / (1 + n / 2)   (0 = aucune coupure)
+      - branches de croisement : morceaux |cos| < COUPURE_COLINEAR_MIN, pondérés par
+        COUPURE_POIDS_BRANCHE[classe cycliste][classe croisée] -> n_eff (25.11)
+      - écart_max : branches de classe plus intense que celle du cycliste
+      - intensité = 1 - (1 - écart_max / 3) / (1 + n_eff / 2)   (0 = aucune coupure)
     Segments avec giratoire à proximité (giratoire_<buffer> > 0) : intensité NaN.
 
     ctx attendu : colname(attr), out_name, row (ligne Excel), input_file_path.
@@ -228,9 +245,21 @@ def derive_coupure(features: pd.DataFrame, ctx: dict) -> pd.DataFrame:
     cos_cyc = np.full(n_seg, np.nan)
     cos_cyc[own.index.to_numpy()] = own["cos"].to_numpy()
 
-    # --- Coupures : non colinéaires et plus intenses que la route du cycliste --
-    cut = pdf[pdf["cos"] < COUPURE_COLINEAR_MIN]
-    cut = cut[cut["cls"].to_numpy() < classe_cyc[cut["seg"].to_numpy()]]
+    # --- Croisements : toutes les branches non colinéaires, pondérées (25.11) --
+    # AVANT : seules les branches plus intenses que la route du cycliste, poids 1
+    cross = pdf[pdf["cos"] < COUPURE_COLINEAR_MIN].copy()
+    cut = cross.copy()
+    own_cut = classe_cyc[cut["seg"].to_numpy()].astype(int)
+    cut["w"] = [COUPURE_POIDS_BRANCHE.get(o, {}).get(int(k), 0.0) for o, k in zip(own_cut, cut["cls"].to_numpy())]
+    cut = cut[cut["w"] > 0]
+    n_branch = np.zeros(n_seg)
+    n_eff = np.zeros(n_seg)
+    if len(cut):
+        gb = cut.groupby("seg")["w"]
+        n_branch[gb.size().index.to_numpy()] = gb.size().to_numpy()
+        n_eff[gb.sum().index.to_numpy()] = gb.sum().to_numpy()
+    # écart : toutes les branches plus intenses que la route du cycliste, indépendamment des poids (inchangé)
+    cut = cross[cross["cls"].to_numpy() < classe_cyc[cross["seg"].to_numpy()]]
     n_cut = np.zeros(n_seg)
     ecart = np.zeros(n_seg)
     if len(cut):
@@ -239,7 +268,7 @@ def derive_coupure(features: pd.DataFrame, ctx: dict) -> pd.DataFrame:
         mins = g.min()
         ecart[mins.index.to_numpy()] = classe_cyc[mins.index.to_numpy()] - mins.to_numpy()
 
-    intensity = compute_coupure_intensity(classe_cyc, n_cut, ecart)
+    intensity = compute_coupure_intensity(classe_cyc, n_eff, ecart)   # AVANT : n_cut
 
     # Segments sans géométrie exploitable
     bad = ~shapely.is_valid(seg_geoms) | shapely.is_empty(seg_geoms) | np.isnan(d_seg).any(axis=1)
@@ -261,7 +290,9 @@ def derive_coupure(features: pd.DataFrame, ctx: dict) -> pd.DataFrame:
 
     return pd.DataFrame({
         out_name: intensity,                                  # intensité de coupure (défavorable)
-        f"{out_name}_n": n_cut,                               # nombre de coupures (écart > 0)
+        f"{out_name}_n": n_branch,                            # nombre de branches de croisement comptées (poids > 0)
+        f"{out_name}_n_eff": n_eff,                           # somme pondérée des branches (utilisée dans le score)
+        f"{out_name}_n_ecart": n_cut,                         # dont branches plus intenses que la route du cycliste
         f"{out_name}_ecart": ecart,                           # écart de classe maximal (0 à 3)
         f"{out_name}_classe_cycliste": classe_cyc,            # 1, 2, 3, ou 4 hors hiérarchie
         f"{out_name}_cos_cycliste": cos_cyc,                  # colinéarité de la route retenue (NaN si hors hiérarchie)

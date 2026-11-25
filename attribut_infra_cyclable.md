@@ -26,7 +26,7 @@ Une seule classe par way OSM : la première règle qui s'applique, dans l'ordre 
 | 10 | `highway=track / path / bridleway` (hors `path` désigné) | `partage` | 0,3 | 2 | 7 662 | peut être retirée |
 | 11 | `cycleway:*=shared_lane` (marquage de chaussée partagée) | `chaussee_partagee` | 0,2 | 1 | 63 | peut être retirée |
 | 12 | autres routes ouvertes aux vélos, dont `cycleway=separate` | `bike_road` | 0 | 0 | 8 413 | peut être retirée |
-| — | `footway` sans accès vélo, `service`, autoroutes, `bicycle=no`… | *(hors graphe vélo)* | — | — | 15 138 | — |
+| — | `footway` sans accès vélo, `service`, autoroutes, `bicycle=no`, `bicycle=dismount` (depuis le 25.11)… | *(hors graphe vélo)* | — | — | 15 138 | — |
 
 km = longueur des ways de `GG.osm.pbf` (14.10.2026), classification OSM seule, **avant** fusion avec le schéma cyclable. Une route avec `cycleway:both=lane` compte une fois. Ces km sont plus élevés que ceux affichés par `0_1` et `2_1`, qui mesurent le réseau découpé au périmètre et nettoyé : comparer des parts, pas des km.
 
@@ -43,6 +43,7 @@ Côtés de la rue : les valeurs de `cycleway`, `cycleway:left`, `cycleway:right`
 | 23.11 | `shared_lane` sort de `partage_bus` → `chaussee_partagee` (0,2) | 63 |
 | 23.11 | `busway:*` et `bus:lanes` / `psv:lanes` → `partage_bus` | 24 depuis `bike_road` |
 | 23.11 | `opposite_lane` / `opposite_track` → `contresens` (0,5) | 20 depuis `bike_road` |
+| 25.11 | `bicycle=dismount` retiré du graphe vélo (comme `bicycle=no`) | ≈ 19 km d'arêtes orientées, surtout `pedestrian` (`bike_pedestrian_area`) et `path` (`partage`) |
 
 ## 2. Fusion avec le schéma cyclable d'agglomération (`0_1`, cellules 25–26)
 

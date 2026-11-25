@@ -12,13 +12,15 @@
 | `SOCLE_COLUMN` | `"socle"` | colonne True / False de l'Excel qui désigne les attributs du socle |
 | `SOCLE_THRESHOLD` (T) | 0,5 | seuil sur `classe_socle` |
 | `SOCLE_DELTA` (δ) | 0 | adoucissement : le bonus monte de 0 à 100 % entre T − δ et T + δ (0 = marche franche) |
+| `SOCLE_AGG` | `"mean"` | méthode de calcul de F : `mean`, `median` ou `geomean` (voir §2 bis) — ajout du 25.11 |
+| `SOCLE_GEOMEAN_EPS` | 0,01 | `geomean` : plancher appliqué aux attributs avant le log |
 | `BONUS_MINMAX` | `True` | `classe_bonus` min-maxée sur [0, 1] (tous les segments) |
 | `SOCLE_HIST_THRESHOLDS` | 0,30 à 0,70 par pas de 0,05 | seuils du tableau « km au-dessus du seuil » |
 | `NAN_POLICY` | `"ignore"` | traitement des NaN dans `bike_index` et les classes (voir §5) |
 
 Poids : `initial_weight` de l'Excel, pour le socle comme pour le bonus. Un attribut de poids 0 est ignoré.
 
-**Socle actuel** (7 attributs, poids 0,5 chacun, soit 1/7 du socle chacun) : `infra_cyclable`, `revetement`, `coupure`, `giratoire` (infrastructure) ; `eclairage`, `vitesse_motorisee`, `accident` (sécurité).
+**Socle actuel** (25.11 : 6 attributs, poids 0,5 chacun, soit 1/6 du socle chacun) : `infra_cyclable`, `coupure`, `giratoire` (infrastructure) ; `eclairage`, `vitesse_motorisee`, `accident` (sécurité).
 
 **Bonus actuel** (attributs inclus, de poids > 0, hors socle) : `amenite`, `pente`, `eau`, `canopee`, `environnement_ouvert_naturel`, `stationnement_velo`, `borne_reparation`, `location`, `service_velo`, `conflit_md`, `charge`.
 
@@ -26,7 +28,7 @@ Poids : `initial_weight` de l'Excel, pour le socle comme pour le bonus. Un attri
 
 Les attributs sont pris **après** normalisation (min-max) et inversion des attributs défavorables : tous sont dans [0, 1], « plus = mieux ».
 
-1. **Socle** F (`classe_socle`, alias *minimal_cyclability_score*) : moyenne pondérée par `initial_weight` des attributs du socle. Les NaN sont ignorés (poids répartis sur les attributs présents).
+1. **Socle** F (`classe_socle`, alias *minimal_cyclability_score*) : agrégation pondérée par `initial_weight` des attributs du socle, selon `SOCLE_AGG` (moyenne arithmétique par défaut, voir §2 bis). Les NaN sont ignorés (poids répartis sur les attributs présents).
 2. **Bonus** B (`classe_bonus`) : moyenne pondérée des autres attributs, NaN ignorés, puis min-max sur [0, 1] si `BONUS_MINMAX`. Calculée pour tous les segments.
 3. **Indice hiérarchisé** :
    - F < T : `bike_index_hierarchised = F` ;
@@ -45,6 +47,28 @@ Exemples (T = 0,5, δ = 0) :
 | 0,51 | 0,8 | 0,90 |
 | 0,90 | 0,8 | 0,98 |
 | 0,90 | 0,2 | 0,92 |
+
+## 2 bis. Méthode de calcul de F (`SOCLE_AGG`, ajout du 25.11)
+
+Les trois méthodes sont pondérées par `initial_weight` et ignorent les NaN. Le bonus B reste une moyenne arithmétique.
+
+| `SOCLE_AGG` | Calcul | Comportement |
+|---|---|---|
+| `mean` | Σ w·x / Σ w | compensatoire : un très bon attribut compense un mauvais |
+| `median` | médiane pondérée (si la moitié du poids tombe entre deux valeurs, moyenne des deux) | robuste aux valeurs extrêmes ; ignore un attribut isolé très bas ou très haut |
+| `geomean` | exp(Σ w·log(max(x, ε)) / Σ w) | peu compensatoire : un attribut proche de 0 tire F vers le bas ; ε = `SOCLE_GEOMEAN_EPS` évite qu'un seul 0 donne F = 0 |
+
+Exemple, quatre attributs de même poids valant 0 ; 0,9 ; 0,9 ; 0,9 : `mean` 0,68, `median` 0,90, `geomean` 0,29.
+
+Sur le `step3_index` du 25.11 (6 attributs socle) :
+
+| `SOCLE_AGG` | P10 | Médiane | P90 | Part du réseau avec F ≥ 0,5 |
+|---|---|---|---|---|
+| `mean` | 0,52 | 0,70 | 0,72 | 98 % |
+| `median` | 0,55 | 0,95 | 1,00 | 98 % |
+| `geomean` | 0,16 | 0,37 | 0,39 | 3 % |
+
+Le seuil T doit être choisi **pour chaque méthode**, sur l'histogramme de `classe_socle`. Avec `geomean`, F est dominée par les attributs souvent nuls (en premier `infra_cyclable` = 0 sur les routes sans aménagement) et la valeur de ε compte beaucoup : 0,01 pénalise très fort, 0,1 beaucoup moins.
 
 ## 3. Arbitrages
 
